@@ -8,19 +8,58 @@ import { useAuth } from "@/context/auth-context";
 import { memoryService, MediaAsset } from "@/lib/memory-service";
 import { MediaUploader } from "@/components/ui/media-uploader";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Bold, Italic, Heading, List, Check, Save, X, Plus, Sparkles } from "lucide-react";
+import { ArrowLeft, Bold, Italic, Heading, List, Check, Save, X, Plus, Sparkles, Link as LinkIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { TitleAutocomplete } from "@/components/ui/title-autocomplete";
 
 const DRAFT_KEY = "memory_ai_draft_new";
 
-// Simple Markdown parser to generate preview HTML safely
+// Duration calculation helper
+function calculateDuration(fromStr: string, toStr: string): string {
+  if (!fromStr || !toStr) return "";
+  const [fromH, fromM] = fromStr.split(":").map(Number);
+  const [toH, toM] = toStr.split(":").map(Number);
+  if (isNaN(fromH) || isNaN(fromM) || isNaN(toH) || isNaN(toM)) return "";
+
+  let diffMin = (toH * 60 + toM) - (fromH * 60 + fromM);
+  if (diffMin < 0) {
+    diffMin += 24 * 60; // spans midnight
+  }
+
+  if (diffMin < 60) {
+    return `${diffMin} Minutes`;
+  } else {
+    const hours = Math.floor(diffMin / 60);
+    const mins = diffMin % 60;
+    return mins > 0
+      ? `${hours} Hour${hours > 1 ? "s" : ""} ${mins} Minute${mins > 1 ? "s" : ""}`
+      : `${hours} Hour${hours > 1 ? "s" : ""}`;
+  }
+}
+
+// URL detection helper
+function countUrls(text: string): number {
+  if (!text) return 0;
+  const matches = text.match(/https?:\/\/[^\s/$.?#].[^\s]*/gi);
+  return matches ? matches.length : 0;
+}
+
+// Simple Markdown parser
 const parseMarkdown = (markdown: string) => {
   if (!markdown) return "";
   let html = markdown
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
+    .replace(/>/g, "&gt;");
+
+  // Convert unformatted URLs to clickable links
+  html = html.replace(
+    /(https?:\/\/[^\s<]+)/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-neutral-900 dark:text-white underline font-semibold hover:opacity-80">$1</a>'
+  );
+
+  html = html
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.*?)\*/g, "<em>$1</em>")
     .replace(/^### (.*?)$/gm, "<h3 class='text-sm font-bold mt-3 mb-1'>$1</h3>")
@@ -39,13 +78,16 @@ export default function NewMemoryPage() {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [category, setCategory] = useState<string>("Note");
+  const [isCustomCategory, setIsCustomCategory] = useState(false);
+  const [customCategory, setCustomCategory] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
-  const [time, setTime] = useState(() => {
-    const now = new Date();
-    return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  });
+  
+  // Timing states
+  const [fromTime, setFromTime] = useState("09:00");
+  const [toTime, setToTime] = useState("09:40");
+  const [duration, setDuration] = useState("40 Minutes");
 
   // Phase 3 media array states
   const [images, setImages] = useState<MediaAsset[]>([]);
@@ -62,6 +104,13 @@ export default function NewMemoryPage() {
   const [hasRestorableDraft, setHasRestorableDraft] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Auto-calculate duration
+  useEffect(() => {
+    setDuration(calculateDuration(fromTime, toTime));
+  }, [fromTime, toTime]);
+
+  const linkCount = countUrls(content);
 
   // AI Autofill Trigger
   const handleAIAutoFill = async () => {
@@ -110,19 +159,19 @@ export default function NewMemoryPage() {
     }
   }, []);
 
-  // Periodic draft auto-saver (every 3 seconds if content is changing)
+  // Periodic draft auto-saver
   useEffect(() => {
     if (!title && !content && images.length === 0 && audios.length === 0 && documents.length === 0 && !summary) return;
     
     const saver = setTimeout(() => {
-      const draftObj = { title, content, category, tags, date, time, images, audios, documents, summary };
+      const draftObj = { title, content, category, tags, date, fromTime, toTime, duration, images, audios, documents, summary };
       localStorage.setItem(DRAFT_KEY, JSON.stringify(draftObj));
       const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       setDraftSavedTime(now);
     }, 3000);
 
     return () => clearTimeout(saver);
-  }, [title, content, category, tags, date, time, images, audios, documents, summary]);
+  }, [title, content, category, tags, date, fromTime, toTime, duration, images, audios, documents, summary]);
 
   const handleRestoreDraft = () => {
     const savedDraft = localStorage.getItem(DRAFT_KEY);
@@ -134,7 +183,9 @@ export default function NewMemoryPage() {
         setCategory(parsed.category || "Note");
         setTags(parsed.tags || []);
         setDate(parsed.date || new Date().toISOString().split("T")[0]);
-        setTime(parsed.time || "12:00");
+        setFromTime(parsed.fromTime || "09:00");
+        setToTime(parsed.toTime || "09:40");
+        setDuration(parsed.duration || "40 Minutes");
         setImages(parsed.images || []);
         setAudios(parsed.audios || []);
         setDocuments(parsed.documents || []);
@@ -152,7 +203,7 @@ export default function NewMemoryPage() {
     setHasRestorableDraft(false);
   };
 
-  // Helper to insert markdown tags at cursor selection
+  // Insert markdown tags helper
   const handleInsertMarkdown = (syntax: string) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -177,14 +228,12 @@ export default function NewMemoryPage() {
 
     setContent(before + replacement + after);
     
-    // Maintain cursor position focus
     setTimeout(() => {
       textarea.focus();
       textarea.setSelectionRange(start + replacement.length, start + replacement.length);
     }, 50);
   };
 
-  // Add tags chip handlers
   const handleAddTag = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" || e.key === " " || e.key === ",") {
       e.preventDefault();
@@ -211,7 +260,10 @@ export default function NewMemoryPage() {
         title: title.trim(),
         content: content.trim(),
         date,
-        time,
+        time: fromTime, // Compatibility mapping
+        fromTime,
+        toTime,
+        duration,
         tags,
         category,
         userId: user.uid,
@@ -221,11 +273,9 @@ export default function NewMemoryPage() {
         summary: summary.trim(),
       });
 
-      // Clear draft on successful save
       localStorage.removeItem(DRAFT_KEY);
       setSaveSuccess(true);
       
-      // Delay transition to show success checkmark
       setTimeout(() => {
         router.push("/dashboard");
       }, 600);
@@ -240,105 +290,128 @@ export default function NewMemoryPage() {
 
   return (
     <ProtectedRoute>
-      <MobileFrame>
-        <div className="flex-1 flex flex-col bg-background pb-6 select-none overflow-hidden relative">
-          
-          {/* Header */}
-          <div className="h-16 px-6 border-b border-neutral-100 dark:border-neutral-900 flex items-center justify-between bg-background/95 dark:bg-neutral-950/95 backdrop-blur-md z-30 shrink-0">
-            <div className="flex items-center gap-3">
-              <button 
-                onClick={() => router.push("/dashboard")}
-                className="w-8 h-8 rounded-full hover:bg-neutral-50 dark:hover:bg-neutral-900 flex items-center justify-center text-neutral-500 hover:text-neutral-950 dark:hover:text-white transition-colors cursor-pointer outline-none"
-              >
-                <ArrowLeft className="w-4 h-4" />
-              </button>
-              <span className="font-mono text-xs uppercase tracking-wider font-semibold text-neutral-800 dark:text-neutral-200">
-                New Memory
-              </span>
+      {/* MOBILE FORM VIEWPORT */}
+      <div className="block lg:hidden w-full">
+        <MobileFrame>
+          <div className="flex-1 flex flex-col bg-background pb-6 select-none overflow-hidden relative">
+            
+            {/* Header */}
+            <div className="h-16 px-6 border-b border-neutral-100 dark:border-neutral-900 flex items-center justify-between bg-background/95 dark:bg-neutral-950/95 backdrop-blur-md z-30 shrink-0">
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={() => router.push("/dashboard")}
+                  className="w-8 h-8 rounded-full hover:bg-neutral-50 dark:hover:bg-neutral-900 flex items-center justify-center text-neutral-500 hover:text-neutral-950 dark:hover:text-white transition-colors cursor-pointer outline-none"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+                <span className="font-mono text-xs uppercase tracking-wider font-semibold text-neutral-800 dark:text-neutral-200">
+                  New Memory
+                </span>
+              </div>
+
+              {draftSavedTime && (
+                <span className="text-[9px] font-mono text-neutral-400 dark:text-neutral-500 flex items-center gap-1">
+                  <Check className="w-3 h-3 text-green-500" />
+                  Draft {draftSavedTime}
+                </span>
+              )}
             </div>
 
-            {/* Auto-saved draft indicator */}
-            {draftSavedTime && (
-              <span className="text-[9px] font-mono text-neutral-400 dark:text-neutral-500 flex items-center gap-1">
-                <Check className="w-3 h-3 text-green-500" />
-                Draft {draftSavedTime}
-              </span>
-            )}
-          </div>
-
-          {/* Form Content container scrollable */}
-          <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
-            
-            {/* Restorable Draft Alert Banner */}
-            <AnimatePresence>
-              {hasRestorableDraft && (
-                <motion.div
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  className="bg-neutral-50 dark:bg-neutral-900 border border-neutral-100 dark:border-neutral-800 p-3 rounded-2xl flex items-center justify-between text-xs"
-                >
-                  <span className="text-neutral-600 dark:text-neutral-400 font-medium">Restorable draft found</span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleRestoreDraft}
-                      className="text-neutral-900 dark:text-white font-bold hover:underline cursor-pointer outline-none"
-                    >
-                      Restore
-                    </button>
-                    <button
-                      onClick={handleDismissDraft}
-                      className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 font-medium cursor-pointer outline-none"
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <form onSubmit={handleSubmit} className="space-y-5 text-left pb-12">
-              
-              {/* Title input */}
-              <div className="space-y-1">
-                <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">Memory Title</span>
-                <Input
-                  type="text"
-                  required
-                  placeholder="Name your memory..."
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  className="h-11 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-100 dark:border-neutral-900 rounded-xl text-xs placeholder:text-neutral-450 focus-visible:ring-0 focus-visible:border-neutral-200 dark:focus-visible:border-neutral-800 shadow-none text-neutral-800 dark:text-neutral-200 font-semibold"
-                />
-              </div>
-
-              {/* Category selection */}
-              <div className="space-y-1.5">
-                <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">Category</span>
-                <div className="flex items-center gap-1.5 pt-0.5 overflow-x-auto pb-0.5">
-                  {(() => {
-                    const defaults = ["Note", "Activity", "Insight", "Reminder"];
-                    const list = defaults.includes(category) ? defaults : [...defaults, category];
-                    return list.map((cat) => (
+            {/* Scrollable Container */}
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+              <AnimatePresence>
+                {hasRestorableDraft && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className="bg-neutral-50 dark:bg-neutral-900 border border-neutral-100 dark:border-neutral-800 p-3 rounded-2xl flex items-center justify-between text-xs"
+                  >
+                    <span className="text-neutral-600 dark:text-neutral-400 font-medium">Restorable draft found</span>
+                    <div className="flex gap-2">
                       <button
-                        key={cat}
-                        type="button"
-                        onClick={() => setCategory(cat)}
-                        className={`text-[9px] uppercase tracking-wider px-2.5 py-1.5 rounded-full font-semibold border transition-all cursor-pointer outline-none ${
-                          category === cat
-                            ? "bg-neutral-950 dark:bg-white text-white dark:text-neutral-950 border-neutral-950 dark:border-white"
-                            : "bg-transparent text-neutral-450 dark:text-neutral-555 border-neutral-100 dark:border-neutral-900 hover:text-neutral-600 dark:hover:text-neutral-355"
-                        }`}
+                        onClick={handleRestoreDraft}
+                        className="text-neutral-900 dark:text-white font-bold hover:underline cursor-pointer outline-none"
                       >
-                        {cat}
+                        Restore
                       </button>
-                    ));
-                  })()}
-                </div>
-              </div>
+                      <button
+                        onClick={handleDismissDraft}
+                        className="text-neutral-450 hover:text-neutral-600 dark:hover:text-neutral-300 font-medium cursor-pointer outline-none"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
-              {/* Date & Time override controls */}
-              <div className="grid grid-cols-2 gap-3">
+              <form onSubmit={handleSubmit} className="space-y-5 text-left pb-12">
+                {/* Title Autocomplete */}
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-450">Memory Title</span>
+                  <TitleAutocomplete
+                    value={title}
+                    onChange={setTitle}
+                    required
+                  />
+                </div>
+
+                  {/* Category */}
+                 <div className="space-y-1.5">
+                   <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-450">Category</span>
+                   <select
+                     value={isCustomCategory ? "Other" : category}
+                     onChange={(e) => {
+                       const val = e.target.value;
+                       if (val === "Other") {
+                         setIsCustomCategory(true);
+                         setCategory(customCategory || "Other");
+                       } else {
+                         setIsCustomCategory(false);
+                         setCategory(val);
+                       }
+                     }}
+                     className="w-full h-11 px-3.5 bg-neutral-50/50 dark:bg-neutral-900/40 border border-neutral-100 dark:border-neutral-900 rounded-xl text-xs font-semibold text-neutral-800 dark:text-neutral-200 outline-none focus:border-neutral-250 cursor-pointer"
+                   >
+                     {[
+                       "Note", "Activity", "Insight", "Reminder", 
+                       "Class Work", "Parent Meeting", "Parent Calling", 
+                       "Student Interaction", "Meeting @person", "Project Work", 
+                       "Student Issue"
+                     ].map((cat) => (
+                       <option key={cat} value={cat} className="bg-white dark:bg-neutral-950 text-neutral-800 dark:text-neutral-200">
+                         {cat}
+                       </option>
+                     ))}
+                     <option value="Other" className="bg-white dark:bg-neutral-950 text-neutral-800 dark:text-neutral-200">
+                       Other (Custom)
+                     </option>
+                   </select>
+                  
+                  {isCustomCategory && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="pt-1.5"
+                    >
+                      <Input
+                        type="text"
+                        placeholder="Enter custom category..."
+                        required
+                        value={customCategory}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setCustomCategory(val);
+                          setCategory(val || "Other");
+                        }}
+                        className="h-9 max-w-xs bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-100 dark:border-neutral-900 rounded-xl text-xs text-neutral-800 dark:text-neutral-200 font-mono shadow-none focus-visible:ring-0 focus-visible:border-neutral-250"
+                      />
+                    </motion.div>
+                  )}
+                </div>
+
+                {/* Date logged */}
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">Date Logged</span>
                   <Input
@@ -346,235 +419,442 @@ export default function NewMemoryPage() {
                     required
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
-                    className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-100 dark:border-neutral-900 rounded-xl text-xs focus-visible:ring-0 focus-visible:border-neutral-250 dark:focus-visible:border-neutral-850 shadow-none text-neutral-800 dark:text-neutral-200 font-mono"
+                    className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-100 dark:border-neutral-900 rounded-xl text-xs text-neutral-800 dark:text-neutral-200 font-mono shadow-none focus-visible:ring-0 focus-visible:border-neutral-250 dark:focus-visible:border-neutral-850"
                   />
                 </div>
-                <div className="space-y-1">
-                  <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">Time Logged</span>
-                  <Input
-                    type="time"
-                    required
-                    value={time}
-                    onChange={(e) => setTime(e.target.value)}
-                    className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-100 dark:border-neutral-900 rounded-xl text-xs focus-visible:ring-0 focus-visible:border-neutral-250 dark:focus-visible:border-neutral-850 shadow-none text-neutral-800 dark:text-neutral-200 font-mono"
-                  />
-                </div>
-              </div>
 
-              {/* Markdown Editor / Preview Container */}
-              <div className="space-y-2 relative">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">Rich Text Content</span>
-                  
-                  <div className="flex items-center gap-2">
-                    {/* AI Auto-fill trigger button */}
+                {/* From / To Time & Calculated Duration */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">From Time</span>
+                    <Input
+                      type="time"
+                      required
+                      value={fromTime}
+                      onChange={(e) => setFromTime(e.target.value)}
+                      className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-100 dark:border-neutral-900 rounded-xl text-xs text-neutral-800 dark:text-neutral-200 font-mono shadow-none focus-visible:ring-0 focus-visible:border-neutral-250"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">To Time</span>
+                    <Input
+                      type="time"
+                      required
+                      value={toTime}
+                      onChange={(e) => setToTime(e.target.value)}
+                      className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-100 dark:border-neutral-900 rounded-xl text-xs text-neutral-800 dark:text-neutral-200 font-mono shadow-none focus-visible:ring-0 focus-visible:border-neutral-250"
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-neutral-50/50 dark:bg-neutral-900/25 border border-neutral-100 dark:border-neutral-900 p-3 rounded-xl flex justify-between items-center text-xs">
+                  <span className="font-mono text-[9px] uppercase tracking-wider text-neutral-400 font-bold">Auto Duration</span>
+                  <span className="font-bold font-mono text-[10px] text-neutral-800 dark:text-neutral-200">{duration || "—"}</span>
+                </div>
+
+                {/* Markdown Editor */}
+                <div className="space-y-2 relative">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-450 flex items-center gap-1.5">
+                      <span>Rich Text Content</span>
+                      {linkCount > 0 && (
+                        <span className="flex items-center gap-0.5 text-[8px] bg-neutral-950 text-white dark:bg-white dark:text-neutral-950 px-1.5 py-0.5 rounded font-bold font-mono">
+                          <LinkIcon className="w-2.5 h-2.5" />
+                          <span>{linkCount} Link{linkCount > 1 ? "s" : ""}</span>
+                        </span>
+                      )}
+                    </span>
+                    
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleAIAutoFill}
+                        disabled={isAnalyzing || !content.trim()}
+                        className="flex items-center gap-1.5 text-[9px] uppercase font-mono font-bold tracking-wider px-2.5 py-1 rounded-lg transition-all bg-neutral-950 text-white dark:bg-white dark:text-neutral-950 disabled:opacity-40"
+                      >
+                        {isAnalyzing ? (
+                          <div className="h-2.5 w-2.5 rounded-full border border-transparent border-t-current animate-spin" />
+                        ) : (
+                          <Sparkles className="w-3 h-3" />
+                        )}
+                        <span>AI Auto-fill</span>
+                      </button>
+
+                      <div className="flex bg-neutral-50 dark:bg-neutral-900 p-0.5 rounded-lg border border-neutral-100 dark:border-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() => setIsPreview(false)}
+                          className={`text-[9px] uppercase font-mono font-bold tracking-wider px-2 py-1 rounded-md transition-all ${
+                            !isPreview ? "bg-white dark:bg-neutral-850 shadow-sm text-neutral-950 dark:text-white" : "text-neutral-400"
+                          }`}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsPreview(true)}
+                          className={`text-[9px] uppercase font-mono font-bold tracking-wider px-2 py-1 rounded-md transition-all ${
+                            isPreview ? "bg-white dark:bg-neutral-850 shadow-sm text-neutral-950 dark:text-white" : "text-neutral-400"
+                          }`}
+                        >
+                          Preview
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {!isPreview ? (
+                    <div className="border border-neutral-100 dark:border-neutral-900 rounded-2xl overflow-hidden bg-neutral-50/20 dark:bg-neutral-950/20 flex flex-col">
+                      <div className="h-9 px-3 border-b border-neutral-150 dark:border-neutral-900 bg-neutral-50/50 dark:bg-neutral-900/30 flex items-center gap-2">
+                        <button type="button" onClick={() => handleInsertMarkdown("bold")} className="p-1 text-neutral-500 hover:text-neutral-900"><Bold className="w-3.5 h-3.5" /></button>
+                        <button type="button" onClick={() => handleInsertMarkdown("italic")} className="p-1 text-neutral-500 hover:text-neutral-900"><Italic className="w-3.5 h-3.5" /></button>
+                        <button type="button" onClick={() => handleInsertMarkdown("heading")} className="p-1 text-neutral-500 hover:text-neutral-900"><Heading className="w-3.5 h-3.5" /></button>
+                        <button type="button" onClick={() => handleInsertMarkdown("list")} className="p-1 text-neutral-500 hover:text-neutral-900"><List className="w-3.5 h-3.5" /></button>
+                      </div>
+                      <textarea
+                        ref={textareaRef}
+                        required
+                        placeholder="Start writing..."
+                        value={content}
+                        onChange={(e) => setContent(e.target.value)}
+                        className="min-h-[160px] p-4 text-xs bg-transparent border-0 focus:outline-none focus:ring-0 resize-none text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400"
+                      />
+                    </div>
+                  ) : (
+                    <div 
+                      className="min-h-[195px] p-4 border border-neutral-100 dark:border-neutral-900 bg-neutral-50/20 dark:bg-neutral-950/20 rounded-2xl text-xs text-neutral-800 dark:text-neutral-200 overflow-y-auto leading-relaxed"
+                      dangerouslySetInnerHTML={{ __html: parseMarkdown(content) || "<span class='text-neutral-400 italic'>Write something to preview...</span>" }}
+                    />
+                  )}
+                </div>
+
+                {/* AI Summary */}
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">AI Short Summary</span>
+                  <textarea
+                    placeholder="Auto-fill or write summary..."
+                    value={summary}
+                    onChange={(e) => setSummary(e.target.value)}
+                    className="w-full min-h-[90px] py-2.5 px-3 text-xs bg-neutral-50/50 dark:bg-neutral-900/40 border border-neutral-100 dark:border-neutral-900 rounded-xl focus:outline-none text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400 resize-none"
+                  />
+                </div>
+
+                {/* Tags */}
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">Semantic Tags</span>
+                    <div className="relative">
+                      <Input
+                        type="text"
+                        placeholder="Add tag..."
+                        value={tagInput}
+                        onChange={(e) => setTagInput(e.target.value)}
+                        onKeyDown={handleAddTag}
+                        className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-100 dark:border-neutral-900 rounded-xl text-xs text-neutral-800 dark:text-neutral-200"
+                      />
+                      <div className="absolute right-3.5 top-1/2 transform -translate-y-1/2 text-neutral-400">
+                        <Plus className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
+                  </div>
+                  {tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {tags.map((tag) => (
+                        <span key={tag} className="flex items-center gap-1 text-[9px] font-semibold font-mono bg-neutral-50 dark:bg-neutral-900 text-neutral-600 dark:text-neutral-400 border border-neutral-100 dark:border-neutral-800/80 pl-2.5 pr-1.5 py-0.5 rounded-full">
+                          <span>#{tag}</span>
+                          <button type="button" onClick={() => handleRemoveTag(tag)} className="text-neutral-400 hover:text-red-500"><X className="w-3 h-3" /></button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Media assets */}
+                <div className="border-t border-neutral-100 dark:border-neutral-900 pt-4">
+                  <MediaUploader
+                    images={images}
+                    onImagesChange={setImages}
+                    audios={audios}
+                    onAudiosChange={setAudios}
+                    documents={documents}
+                    onDocumentsChange={setDocuments}
+                  />
+                </div>
+
+                {/* Actions */}
+                <div className="pt-4">
+                  <Button
+                    type="submit"
+                    disabled={isSaving || !title.trim() || !content.trim()}
+                    className="w-full h-12 bg-neutral-950 text-white dark:bg-white dark:text-neutral-950 hover:bg-neutral-900 dark:hover:bg-neutral-100 rounded-2xl text-xs font-semibold uppercase tracking-wider disabled:opacity-40 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg outline-none"
+                  >
+                    {saveSuccess ? (
+                      <span className="flex items-center gap-2 text-green-500"><Check className="w-4 h-4" /> Saved!</span>
+                    ) : isSaving ? (
+                      <span className="flex items-center gap-2"><div className="h-4 w-4 rounded-full border border-transparent border-t-current animate-spin" /> Saving...</span>
+                    ) : (
+                      <span className="flex items-center gap-2"><Save className="w-4 h-4" /> Save Memory</span>
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </div>
+
+          </div>
+        </MobileFrame>
+      </div>
+
+      {/* DEDICATED DESKTOP DUAL-PANE VIEWPORT */}
+      <div className="hidden lg:flex w-full min-h-screen bg-neutral-50 dark:bg-neutral-950 justify-center p-8 select-none">
+        <div className="w-full max-w-5xl bg-white dark:bg-neutral-950 border border-neutral-200/80 dark:border-neutral-900 rounded-[32px] premium-shadow-md flex flex-col overflow-hidden animate-in fade-in duration-300">
+          
+          {/* Header */}
+          <div className="h-20 px-8 border-b border-neutral-100 dark:border-neutral-900 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-4 text-left">
+              <button 
+                onClick={() => router.push("/dashboard")}
+                className="w-10 h-10 rounded-full hover:bg-neutral-50 dark:hover:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 flex items-center justify-center text-neutral-500 hover:text-neutral-950 dark:hover:text-white transition-colors cursor-pointer outline-none"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+              <div className="flex flex-col">
+                <span className="font-mono text-[9px] uppercase tracking-widest text-neutral-400 font-bold">Workspace Creator</span>
+                <h1 className="text-sm font-bold text-neutral-900 dark:text-white">Record New Mind Activity</h1>
+              </div>
+            </div>
+
+            {draftSavedTime && (
+              <span className="text-[10px] font-mono text-neutral-450 dark:text-neutral-500 flex items-center gap-1.5">
+                <Check className="w-4 h-4 text-green-500" />
+                <span>Auto-saved Draft ({draftSavedTime})</span>
+              </span>
+            )}
+          </div>
+
+          {/* Body Dual-Pane */}
+          <div className="flex-1 flex overflow-hidden min-h-0">
+            
+            {/* LEFT PANE: Form Input controls */}
+            <div className="w-1/2 overflow-y-auto p-8 border-r border-neutral-100 dark:border-neutral-900 space-y-6 text-left">
+              {hasRestorableDraft && (
+                <div className="bg-neutral-50 dark:bg-neutral-900 border border-neutral-150 dark:border-neutral-850 p-4 rounded-2xl flex items-center justify-between text-xs animate-in slide-in-from-top-1">
+                  <span className="text-neutral-600 dark:text-neutral-450 font-medium">Restorable draft found.</span>
+                  <div className="flex gap-3">
+                    <button onClick={handleRestoreDraft} className="text-neutral-900 dark:text-white font-bold hover:underline cursor-pointer">Restore</button>
+                    <button onClick={handleDismissDraft} className="text-neutral-400 hover:text-neutral-600 font-semibold cursor-pointer">Dismiss</button>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-5">
+                {/* Title */}
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-450 block font-bold">Activity Title</span>
+                  <TitleAutocomplete value={title} onChange={setTitle} required />
+                </div>
+
+                {/* Category selectors */}
+                <div className="space-y-2">
+                  <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-450 block font-bold">Category</span>
+                  <div className="flex items-center gap-2 pt-0.5">
+                    {["Note", "Activity", "Insight", "Reminder"].map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setCategory(cat)}
+                        className={`text-[10px] uppercase tracking-wider px-4 py-2 rounded-xl font-bold border transition-all cursor-pointer outline-none ${
+                          category === cat
+                            ? "bg-neutral-950 dark:bg-white text-white dark:text-neutral-950 border-neutral-950 dark:border-white"
+                            : "bg-transparent text-neutral-400 dark:text-neutral-500 border-neutral-200 dark:border-neutral-900 hover:text-neutral-600"
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Date logged */}
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400 block font-bold">Date Logged</span>
+                  <Input
+                    type="date"
+                    required
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-150 dark:border-neutral-900 rounded-xl text-xs text-neutral-800 dark:text-neutral-200 font-mono shadow-none focus-visible:ring-0 focus-visible:border-neutral-250"
+                  />
+                </div>
+
+                {/* From / To Times */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400 block font-bold">From Time</span>
+                    <Input
+                      type="time"
+                      required
+                      value={fromTime}
+                      onChange={(e) => setFromTime(e.target.value)}
+                      className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-150 dark:border-neutral-900 rounded-xl text-xs text-neutral-800 dark:text-neutral-200 font-mono shadow-none focus-visible:ring-0 focus-visible:border-neutral-250"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400 block font-bold">To Time</span>
+                    <Input
+                      type="time"
+                      required
+                      value={toTime}
+                      onChange={(e) => setToTime(e.target.value)}
+                      className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-150 dark:border-neutral-900 rounded-xl text-xs text-neutral-800 dark:text-neutral-200 font-mono shadow-none focus-visible:ring-0 focus-visible:border-neutral-250"
+                    />
+                  </div>
+                </div>
+
+                {/* Duration readout */}
+                <div className="bg-neutral-50/50 dark:bg-neutral-900/25 border border-neutral-100 dark:border-neutral-900 p-3.5 rounded-xl flex justify-between items-center text-xs">
+                  <span className="font-mono text-[9px] uppercase tracking-wider text-neutral-450 font-bold">Calculated Duration</span>
+                  <span className="font-bold font-mono text-[10px] text-neutral-800 dark:text-neutral-200 bg-white dark:bg-neutral-900 border border-neutral-100 dark:border-neutral-800/80 px-2 py-0.5 rounded">
+                    {duration || "—"}
+                  </span>
+                </div>
+
+                {/* AI Summary */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400 block font-bold">AI Brief Digest Summary</span>
                     <button
                       type="button"
                       onClick={handleAIAutoFill}
                       disabled={isAnalyzing || !content.trim()}
-                      className="flex items-center gap-1.5 text-[9px] uppercase font-mono font-bold tracking-wider px-2.5 py-1 rounded-lg transition-all cursor-pointer outline-none bg-neutral-950 text-white dark:bg-white dark:text-neutral-950 hover:bg-neutral-900 dark:hover:bg-neutral-100 disabled:opacity-40 disabled:pointer-events-none"
+                      className="flex items-center gap-1.5 text-[9px] uppercase font-mono font-bold tracking-wider px-2.5 py-1 rounded-lg transition-all bg-neutral-950 text-white dark:bg-white dark:text-neutral-950 disabled:opacity-40"
                     >
                       {isAnalyzing ? (
                         <div className="h-2.5 w-2.5 rounded-full border border-transparent border-t-current animate-spin" />
                       ) : (
                         <Sparkles className="w-3 h-3" />
                       )}
-                      <span>AI Auto-fill</span>
+                      <span>AI Generate Summary</span>
                     </button>
-
-                    {/* Mode switcher tabs */}
-                    <div className="flex bg-neutral-50 dark:bg-neutral-900 p-0.5 rounded-lg border border-neutral-100 dark:border-neutral-800">
-                      <button
-                        type="button"
-                        onClick={() => setIsPreview(false)}
-                        className={`text-[9px] uppercase font-mono font-bold tracking-wider px-2 py-1 rounded-md transition-all cursor-pointer outline-none ${
-                          !isPreview ? "bg-white dark:bg-neutral-850 shadow-sm text-neutral-950 dark:text-white" : "text-neutral-400 hover:text-neutral-600"
-                        }`}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsPreview(true)}
-                        className={`text-[9px] uppercase font-mono font-bold tracking-wider px-2 py-1 rounded-md transition-all cursor-pointer outline-none ${
-                          isPreview ? "bg-white dark:bg-neutral-850 shadow-sm text-neutral-950 dark:text-white" : "text-neutral-400 hover:text-neutral-600"
-                        }`}
-                      >
-                        Preview
-                      </button>
-                    </div>
                   </div>
-                </div>
-
-                {!isPreview ? (
-                  <div className="border border-neutral-100 dark:border-neutral-900 rounded-2xl overflow-hidden bg-neutral-50/20 dark:bg-neutral-950/20 flex flex-col">
-                    {/* Rich Formatting Toolbar */}
-                    <div className="h-9 px-3 border-b border-neutral-150 dark:border-neutral-900 bg-neutral-50/50 dark:bg-neutral-900/30 flex items-center gap-1 gap-x-2">
-                      <button
-                        type="button"
-                        onClick={() => handleInsertMarkdown("bold")}
-                        title="Bold Text"
-                        className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 hover:text-neutral-900 transition-colors cursor-pointer outline-none"
-                      >
-                        <Bold className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleInsertMarkdown("italic")}
-                        title="Italic Text"
-                        className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 hover:text-neutral-900 transition-colors cursor-pointer outline-none"
-                      >
-                        <Italic className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleInsertMarkdown("heading")}
-                        title="Add Heading"
-                        className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 hover:text-neutral-900 transition-colors cursor-pointer outline-none"
-                      >
-                        <Heading className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleInsertMarkdown("list")}
-                        title="Add Bullet List"
-                        className="p-1 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 hover:text-neutral-900 transition-colors cursor-pointer outline-none"
-                      >
-                        <List className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    {/* Content area */}
-                    <textarea
-                      ref={textareaRef}
-                      required
-                      placeholder="Start writing in markdown (e.g. # Header, **bold**, *italic*)..."
-                      value={content}
-                      onChange={(e) => setContent(e.target.value)}
-                      className="min-h-[160px] p-4 text-xs bg-transparent border-0 focus:outline-none focus:ring-0 resize-none text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400"
-                    />
-                  </div>
-                ) : (
-                  /* Preview HTML Render card */
-                  <div 
-                    className="min-h-[195px] p-4 border border-neutral-100 dark:border-neutral-900 bg-neutral-50/20 dark:bg-neutral-950/20 rounded-2xl text-xs text-neutral-800 dark:text-neutral-200 overflow-y-auto leading-relaxed text-left"
-                    dangerouslySetInnerHTML={{ __html: parseMarkdown(content) || "<span class='text-neutral-400 italic'>Write something to see a preview...</span>" }}
+                  <textarea
+                    placeholder="Summary compiles here..."
+                    value={summary}
+                    onChange={(e) => setSummary(e.target.value)}
+                    className="w-full min-h-[90px] p-3 text-xs bg-neutral-50/50 dark:bg-neutral-900/40 border border-neutral-150 dark:border-neutral-900 rounded-xl focus:outline-none text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400 resize-none font-normal"
                   />
-                )}
-              </div>
-
-              {/* AI Short Summary field */}
-              <div className="space-y-1">
-                <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">AI Short Summary</span>
-                <textarea
-                  placeholder="Click 'AI Auto-fill' to automatically generate a summary, or write your own..."
-                  value={summary}
-                  onChange={(e) => setSummary(e.target.value)}
-                  className="w-full min-h-[90px] py-2.5 px-3 text-xs bg-neutral-50/50 dark:bg-neutral-900/40 border border-neutral-100 dark:border-neutral-900 rounded-xl focus:outline-none text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400 resize-none leading-relaxed"
-                />
-              </div>
-
-              {/* Tags Input chip manager */}
-              <div className="space-y-2">
-                <div className="space-y-1">
-                  <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400">Semantic Tags</span>
-                  <div className="relative">
-                    <Input
-                      type="text"
-                      placeholder="Add tag and press space/enter..."
-                      value={tagInput}
-                      onChange={(e) => setTagInput(e.target.value)}
-                      onKeyDown={handleAddTag}
-                      className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-100 dark:border-neutral-900 rounded-xl text-xs placeholder:text-neutral-450 focus-visible:ring-0 focus-visible:border-neutral-200 dark:focus-visible:border-neutral-850 shadow-none text-neutral-800 dark:text-neutral-200"
-                    />
-                    <div className="absolute right-3.5 top-1/2 transform -translate-y-1/2 text-neutral-400">
-                      <Plus className="w-3.5 h-3.5" />
-                    </div>
-                  </div>
                 </div>
 
-                {/* Displaying tag pills */}
-                {tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="flex items-center gap-1 text-[9px] font-semibold tracking-wider font-mono bg-neutral-50 dark:bg-neutral-900 text-neutral-600 dark:text-neutral-400 border border-neutral-100 dark:border-neutral-800/80 pl-2.5 pr-1.5 py-0.5 rounded-full"
-                      >
-                        <span>#{tag}</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveTag(tag)}
-                          className="hover:text-red-500 text-neutral-400 p-0.5 rounded-full outline-none transition-colors cursor-pointer"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    ))}
+                {/* Semantic Tags */}
+                <div className="space-y-2.5">
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-400 block font-bold">Tags</span>
+                    <div className="relative">
+                      <Input
+                        type="text"
+                        placeholder="Add tag and press space..."
+                        value={tagInput}
+                        onChange={(e) => setTagInput(e.target.value)}
+                        onKeyDown={handleAddTag}
+                        className="h-10 bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-150 dark:border-neutral-900 rounded-xl text-xs text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-450"
+                      />
+                      <div className="absolute right-3.5 top-1/2 transform -translate-y-1/2 text-neutral-400">
+                        <Plus className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
                   </div>
-                )}
+                  {tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {tags.map((tag) => (
+                        <span key={tag} className="flex items-center gap-1.5 text-[9px] font-bold font-mono bg-neutral-50 dark:bg-neutral-900 text-neutral-500 dark:text-neutral-405 border border-neutral-100 dark:border-neutral-850 px-2.5 py-1 rounded-full">
+                          <span>#{tag}</span>
+                          <button type="button" onClick={() => handleRemoveTag(tag)} className="text-neutral-400 hover:text-red-500 cursor-pointer"><X className="w-3 h-3" /></button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Media attachment */}
+                <div className="border-t border-neutral-100 dark:border-neutral-900 pt-4">
+                  <MediaUploader
+                    images={images}
+                    onImagesChange={setImages}
+                    audios={audios}
+                    onAudiosChange={setAudios}
+                    documents={documents}
+                    onDocumentsChange={setDocuments}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT PANE: markdown edit and live preview side-by-side! */}
+            <div className="w-1/2 flex flex-col min-h-0 bg-neutral-50/30 dark:bg-neutral-950/20">
+              
+              {/* Top toolbar */}
+              <div className="h-14 border-b border-neutral-100 dark:border-neutral-900 px-6 flex items-center justify-between shrink-0">
+                <span className="text-[10px] uppercase font-mono tracking-widest text-neutral-450 flex items-center gap-2.5 font-bold">
+                  <span>Markdown Content Editor</span>
+                  {linkCount > 0 && (
+                    <span className="flex items-center gap-1 text-[9px] bg-neutral-950 text-white dark:bg-white dark:text-neutral-950 px-2 py-0.5 rounded-full font-bold font-mono">
+                      <LinkIcon className="w-3 h-3" />
+                      <span>{linkCount} Link{linkCount > 1 ? "s" : ""} detected</span>
+                    </span>
+                  )}
+                </span>
+                
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => handleInsertMarkdown("bold")} className="p-1.5 hover:bg-neutral-100 rounded text-neutral-500"><Bold className="w-4 h-4" /></button>
+                  <button type="button" onClick={() => handleInsertMarkdown("italic")} className="p-1.5 hover:bg-neutral-100 rounded text-neutral-500"><Italic className="w-4 h-4" /></button>
+                  <button type="button" onClick={() => handleInsertMarkdown("heading")} className="p-1.5 hover:bg-neutral-100 rounded text-neutral-500"><Heading className="w-4 h-4" /></button>
+                  <button type="button" onClick={() => handleInsertMarkdown("list")} className="p-1.5 hover:bg-neutral-100 rounded text-neutral-500"><List className="w-4 h-4" /></button>
+                </div>
               </div>
 
-              {/* Phase 3 Media Uploader component */}
-              <div className="border-t border-neutral-100 dark:border-neutral-900 pt-4">
-                <MediaUploader
-                  images={images}
-                  onImagesChange={setImages}
-                  audios={audios}
-                  onAudiosChange={setAudios}
-                  documents={documents}
-                  onDocumentsChange={setDocuments}
+              {/* Text editor and Live Preview vertical split */}
+              <div className="flex-1 flex overflow-hidden min-h-0">
+                {/* Textarea pane */}
+                <div className="w-1/2 h-full border-r border-neutral-100 dark:border-neutral-900">
+                  <textarea
+                    ref={textareaRef}
+                    required
+                    placeholder="Write here in markdown..."
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    className="w-full h-full p-6 text-xs bg-transparent border-0 focus:outline-none focus:ring-0 resize-none text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400 font-mono"
+                  />
+                </div>
+                
+                {/* Live Preview HTML pane */}
+                <div 
+                  className="w-1/2 h-full p-6 text-xs text-neutral-800 dark:text-neutral-205 overflow-y-auto leading-relaxed text-left prose dark:prose-invert font-normal bg-white/40 dark:bg-neutral-950/20"
+                  dangerouslySetInnerHTML={{ __html: parseMarkdown(content) || "<span class='text-neutral-400 font-mono italic'>Live formatted HTML preview renders here as you type...</span>" }}
                 />
               </div>
 
-              {/* Action buttons */}
-              <div className="pt-4 flex items-center gap-3">
+              {/* Bottom save bar */}
+              <div className="h-20 px-8 border-t border-neutral-100 dark:border-neutral-900/80 bg-white dark:bg-neutral-950 flex items-center justify-end shrink-0">
                 <Button
-                  type="submit"
+                  onClick={handleSubmit}
                   disabled={isSaving || !title.trim() || !content.trim()}
-                  className="w-full h-12 bg-neutral-950 text-white dark:bg-white dark:text-neutral-950 hover:bg-neutral-900 dark:hover:bg-neutral-100 rounded-2xl text-xs font-semibold uppercase tracking-wider disabled:opacity-40 disabled:pointer-events-none transition-all duration-300 shadow-lg dark:shadow-none flex items-center justify-center gap-2 cursor-pointer outline-none relative overflow-hidden"
+                  className="h-11 px-8 bg-neutral-950 text-white dark:bg-white dark:text-neutral-950 hover:opacity-90 disabled:opacity-40 transition-all flex items-center justify-center gap-2 cursor-pointer rounded-xl font-mono text-[10px] uppercase tracking-wider font-bold shadow-lg"
                 >
-                  <AnimatePresence mode="wait">
-                    {saveSuccess ? (
-                      <motion.span
-                        key="success"
-                        initial={{ opacity: 0, scale: 0.8 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className="flex items-center gap-2"
-                      >
-                        <Check className="w-4 h-4 text-green-500" />
-                        <span>Saved Mind!</span>
-                      </motion.span>
-                    ) : isSaving ? (
-                      <motion.span
-                        key="saving"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        className="flex items-center gap-2"
-                      >
-                        <div className="h-4 w-4 rounded-full border border-transparent border-t-current animate-spin" />
-                        <span>Saving...</span>
-                      </motion.span>
-                    ) : (
-                      <motion.span
-                        key="default"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        className="flex items-center gap-2"
-                      >
-                        <Save className="w-4 h-4" />
-                        <span>Save Memory</span>
-                      </motion.span>
-                    )}
-                  </AnimatePresence>
+                  {saveSuccess ? (
+                    <span className="flex items-center gap-2 text-green-500"><Check className="w-4 h-4" /> Mind Saved Successfully</span>
+                  ) : isSaving ? (
+                    <span className="flex items-center gap-2"><div className="h-4 w-4 rounded-full border border-transparent border-t-current animate-spin" /> Saving Mind Logs...</span>
+                  ) : (
+                    <span className="flex items-center gap-2"><Save className="w-4 h-4" /> Save Memory Log</span>
+                  )}
                 </Button>
               </div>
 
-            </form>
+            </div>
+
           </div>
 
         </div>
-      </MobileFrame>
+      </div>
     </ProtectedRoute>
   );
 }

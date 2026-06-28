@@ -3,13 +3,20 @@
 import React, { useEffect, useState } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useAuth } from "@/context/auth-context";
-import { Menu, LogOut, Settings, Shield, Moon, Sun, HelpCircle, FileText } from "lucide-react";
+import { Menu, LogOut, Settings, Shield, Moon, Sun, HelpCircle, FileText, Share2 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { useRouter } from "next/navigation";
 
-export function SidebarMenu() {
+export function SidebarMenu({
+  onOpenShareCompiler
+}: {
+  onOpenShareCompiler?: () => void;
+}) {
   const { user, logout } = useAuth();
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     // Check local storage or document class list
@@ -36,7 +43,7 @@ export function SidebarMenu() {
   const initial = user?.displayName ? user.displayName.charAt(0) : "M";
 
   return (
-    <Sheet>
+    <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger render={
         <Button variant="ghost" size="icon" className="rounded-full w-9 h-9 text-neutral-600 dark:text-neutral-300">
           <Menu className="w-5 h-5" />
@@ -92,6 +99,21 @@ export function SidebarMenu() {
             <Shield className="w-4 h-4" />
             <span>Privacy & Security</span>
           </a>
+
+          <button
+            onClick={() => {
+              setOpen(false);
+              if (onOpenShareCompiler) {
+                onOpenShareCompiler();
+              } else {
+                router.push("/dashboard?openShare=true");
+              }
+            }}
+            className="flex items-center gap-3 py-2 text-left text-neutral-600 dark:text-neutral-300 hover:text-neutral-950 dark:hover:text-white transition-colors cursor-pointer outline-none"
+          >
+            <Share2 className="w-4 h-4" />
+            <span>Daily Share Compiler</span>
+          </button>
 
           <div className="h-px bg-neutral-100 dark:bg-neutral-900 my-2" />
           <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-400 font-mono">Support</div>

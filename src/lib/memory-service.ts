@@ -44,6 +44,11 @@ export interface Memory {
     type: string;
   };
   audioDuration?: number;
+
+  // Phase 6 enhancements timing fields
+  fromTime?: string;
+  toTime?: string;
+  duration?: string;
 }
 
 const LOCAL_STORAGE_KEY = "memory_ai_local_memories";
@@ -258,5 +263,59 @@ export const memoryService = {
       return true;
     }
     return false;
+  },
+
+  // Create a shared logs compiler entry with expiration
+  async createSharedLink(userId: string, date: string, memories: Memory[], durationHours: number, aiSummary?: string): Promise<string> {
+    const createdAt = Date.now();
+    const expiresAt = createdAt + durationHours * 60 * 60 * 1000;
+    const shareData = {
+      userId,
+      date,
+      memories,
+      createdAt,
+      expiresAt,
+      durationHours,
+      aiSummary
+    };
+
+    if (useFirestore() && db) {
+      try {
+        const docRef = await addDoc(collection(db, "shared_logs"), shareData);
+        return docRef.id;
+      } catch (error) {
+        console.error("Firestore add shared_logs failed, saving locally:", error);
+      }
+    }
+
+    // Local Storage Fallback
+    const localSharedKey = "memory_ai_local_shared_logs";
+    const sharedLogs = JSON.parse(localStorage.getItem(localSharedKey) || "[]");
+    const shareId = "share-" + Date.now() + Math.random().toString(36).substr(2, 5);
+    sharedLogs.push({ id: shareId, ...shareData });
+    localStorage.setItem(localSharedKey, JSON.stringify(sharedLogs));
+    return shareId;
+  },
+
+  // Fetch shared logs data by shareId
+  async fetchSharedLink(id: string): Promise<{ date: string; memories: Memory[]; expiresAt: number; durationHours: number; aiSummary?: string } | null> {
+    if (useFirestore() && db) {
+      try {
+        const docRef = doc(db, "shared_logs", id);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          return docSnap.data() as any;
+        }
+      } catch (error) {
+        console.error("Firestore fetch shared_logs failed:", error);
+        throw error;
+      }
+    }
+
+    // Local Storage Fallback
+    const localSharedKey = "memory_ai_local_shared_logs";
+    const sharedLogs = JSON.parse(localStorage.getItem(localSharedKey) || "[]");
+    const found = sharedLogs.find((s: any) => s.id === id);
+    return found || null;
   }
 };
